@@ -8,8 +8,6 @@ apps/*/dist
 infra/*/dist
 .astro
 packages/*/dist
-.env
-.env.local
 build/
 .logs/
 release/
@@ -30,5 +28,5 @@ dist-electron/
 node_modules/
 .alchemy/
 *.log
-.env*
 !.env.example
+config.bat
