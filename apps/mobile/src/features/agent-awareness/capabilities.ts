@@ -1,5 +1,5 @@
-import Constants from "expo-constants";
+import { hasFullIosCapabilities } from "../../lib/iosCapabilities";
 
 export function supportsAgentAwarenessPush() {
-  return Constants.expoConfig?.extra?.iosPersonalTeamBuild !== true;
+  return hasFullIosCapabilities();
 }

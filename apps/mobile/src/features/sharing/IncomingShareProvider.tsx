@@ -1,4 +1,3 @@
-import Constants from "expo-constants";
 import * as Crypto from "expo-crypto";
 import {
   clearSharedPayloads,
@@ -10,6 +9,7 @@ import {
 import React, { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import { Alert, AppState, Platform } from "react-native";
 
+import { hasFullIosCapabilities } from "../../lib/iosCapabilities";
 import {
   buildIncomingShareDraft,
   type IncomingShareDestination,
@@ -45,7 +45,7 @@ function receiveSharingEnabled(): boolean {
   if (Platform.OS !== "ios") {
     return false;
   }
-  return Constants.expoConfig?.extra?.iosPersonalTeamBuild !== true;
+  return hasFullIosCapabilities();
 }
 
 async function resolvedPayloadsForImages(): Promise<ReadonlyArray<ResolvedSharePayload>> {

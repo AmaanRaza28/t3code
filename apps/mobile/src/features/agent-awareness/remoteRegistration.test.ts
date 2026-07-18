@@ -287,8 +287,8 @@ describe("makeRelayDeviceRegistrationRequest", () => {
     expect(resolveApsEnvironment(undefined)).toBe("production");
   });
 
-  it("disables push features in Personal Team relay registrations", () => {
-    Constants.expoConfig!.extra = { iosPersonalTeamBuild: true };
+  it("disables push features for the reduced iOS capability profile", () => {
+    Constants.expoConfig!.extra = { iosCapabilityProfile: "reduced" };
 
     expect(
       makeRelayDeviceRegistrationRequest({
