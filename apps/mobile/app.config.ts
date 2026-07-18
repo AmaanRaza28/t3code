@@ -3,27 +3,65 @@ import type { ExpoConfig } from "expo/config";
 import { BRAND_ASSET_PATHS } from "../../scripts/lib/brand-assets.ts";
 import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
 
+type AppDistribution = "independent" | "upstream";
 type AppVariant = "development" | "preview" | "production";
+type IosCapabilityProfile = "full" | "reduced";
 
 const repoEnv = loadRepoEnv();
 Object.assign(process.env, repoEnv);
 
-const APP_VARIANT = resolveAppVariant(repoEnv.APP_VARIANT);
-const isIosPersonalTeamBuild = repoEnv.T3CODE_IOS_PERSONAL_TEAM === "1";
+const legacyPersonalTeamEnvName = [
+  "T3CODE_IOS_PERSONAL_TEAM",
+  "T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID",
+  "T3CODE_IOS_PERSONAL_TEAM_ID",
+].find((name) => repoEnv[name]?.trim());
 
-const personalTeamBundleIdentifier = repoEnv.T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID?.trim();
+if (legacyPersonalTeamEnvName) {
+  throw new Error(
+    `${legacyPersonalTeamEnvName} is no longer supported. Configure T3CODE_IOS_TEAM_ID, T3CODE_IOS_BUNDLE_ID, and T3CODE_IOS_CAPABILITY_PROFILE separately.`,
+  );
+}
+
+const APP_DISTRIBUTION = resolveAppDistribution(repoEnv.T3CODE_MOBILE_DISTRIBUTION);
+const APP_VARIANT = resolveAppVariant(repoEnv.APP_VARIANT);
+const IOS_CAPABILITY_PROFILE = resolveIosCapabilityProfile(repoEnv.T3CODE_IOS_CAPABILITY_PROFILE);
+const isIndependentDistribution = APP_DISTRIBUTION === "independent";
+const hasReducedIosCapabilities = IOS_CAPABILITY_PROFILE === "reduced";
+
+const configuredAppVersion = repoEnv.T3CODE_MOBILE_APP_VERSION?.trim() || "0.1.0";
+const configuredIosBuildNumber = repoEnv.T3CODE_IOS_BUILD_NUMBER?.trim() || undefined;
+const configuredIosBundleIdentifier = repoEnv.T3CODE_IOS_BUNDLE_ID?.trim() || undefined;
+const configuredIosTeamId = repoEnv.T3CODE_IOS_TEAM_ID?.trim() || undefined;
 const IOS_BUNDLE_IDENTIFIER_PATTERN = /^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/;
+const IOS_BUILD_NUMBER_PATTERN = /^[1-9]\d*$/;
+const IOS_TEAM_ID_PATTERN = /^[A-Z0-9]{10}$/;
+const MOBILE_APP_VERSION_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 
 const fromRepoRoot = (relativePath: string) => `../../${relativePath}`;
 
 if (
-  isIosPersonalTeamBuild &&
-  (!personalTeamBundleIdentifier ||
-    !IOS_BUNDLE_IDENTIFIER_PATTERN.test(personalTeamBundleIdentifier))
+  configuredIosBundleIdentifier &&
+  !IOS_BUNDLE_IDENTIFIER_PATTERN.test(configuredIosBundleIdentifier)
 ) {
   throw new Error(
-    "T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID must be a reverse-DNS identifier such as com.example.t3code when T3CODE_IOS_PERSONAL_TEAM=1.",
+    "T3CODE_IOS_BUNDLE_ID must be a reverse-DNS identifier such as com.example.t3code.",
   );
+}
+
+if (configuredIosTeamId && !IOS_TEAM_ID_PATTERN.test(configuredIosTeamId)) {
+  throw new Error(
+    "T3CODE_IOS_TEAM_ID must be the 10-character uppercase alphanumeric Team ID shown in Xcode.",
+  );
+}
+
+if (!MOBILE_APP_VERSION_PATTERN.test(configuredAppVersion)) {
+  throw new Error(
+    "T3CODE_MOBILE_APP_VERSION must contain three dot-separated non-negative integers such as 0.1.0.",
+  );
+}
+
+if (configuredIosBuildNumber && !IOS_BUILD_NUMBER_PATTERN.test(configuredIosBuildNumber)) {
+  throw new Error("T3CODE_IOS_BUILD_NUMBER must be a positive integer such as 1.");
 }
 
 const DEVELOPMENT_ASSETS = {
@@ -86,6 +124,19 @@ const VARIANT_CONFIG = {
   },
 } as const;
 
+function resolveAppDistribution(value: string | undefined): AppDistribution {
+  switch (value?.trim()) {
+    case undefined:
+    case "":
+    case "upstream":
+      return "upstream";
+    case "independent":
+      return "independent";
+    default:
+      throw new Error('T3CODE_MOBILE_DISTRIBUTION must be either "upstream" or "independent".');
+  }
+}
+
 function resolveAppVariant(value: string | undefined): AppVariant {
   switch (value) {
     case "development":
@@ -97,10 +148,22 @@ function resolveAppVariant(value: string | undefined): AppVariant {
   }
 }
 
+function resolveIosCapabilityProfile(value: string | undefined): IosCapabilityProfile {
+  switch (value?.trim()) {
+    case undefined:
+    case "":
+    case "full":
+      return "full";
+    case "reduced":
+      return "reduced";
+    default:
+      throw new Error('T3CODE_IOS_CAPABILITY_PROFILE must be either "full" or "reduced".');
+  }
+}
+
 const variant = VARIANT_CONFIG[APP_VARIANT];
-const iosBundleIdentifier = isIosPersonalTeamBuild
-  ? personalTeamBundleIdentifier!
-  : variant.iosBundleIdentifier;
+const iosBundleIdentifier = configuredIosBundleIdentifier ?? variant.iosBundleIdentifier;
+const iosTeamId = configuredIosTeamId ?? (isIndependentDistribution ? undefined : "ARK85ZXQ4Z");
 
 const dmSansFonts = {
   regular: "@expo-google-fonts/dm-sans/400Regular/DMSans_400Regular.ttf",
@@ -132,10 +195,9 @@ const sharingPlugin: NonNullable<ExpoConfig["plugins"]>[number] = [
   "expo-sharing",
   {
     ios: {
-      // Personal Teams cannot sign App Groups or extension targets. Keep the
-      // reduced-capability local build usable while release builds expose the
-      // real system share target.
-      enabled: !isIosPersonalTeamBuild,
+      // Reduced profiles omit App Groups and extension targets. Keep those
+      // builds usable while full-capability builds expose the system share target.
+      enabled: !hasReducedIosCapabilities,
       extensionBundleIdentifier: `${iosBundleIdentifier}.sharing`,
       appGroupId: `group.${iosBundleIdentifier}`,
       activationRule: {
@@ -161,35 +223,39 @@ const config: ExpoConfig = {
   slug: "t3-code",
   platforms: ["ios", "android"],
   scheme: variant.scheme,
-  version: "0.1.0",
+  version: configuredAppVersion,
   runtimeVersion: {
     // Fingerprint (not appVersion) so an OTA only reaches binaries whose native
     // project — native deps, config plugins, AND patches/ — matches the update.
-    // With appVersion, every 0.1.0 build shares a runtime version, so a JS update
-    // could land on a binary missing the native changes it needs and crash.
+    // With appVersion, every build of one app version shares a runtime version,
+    // so a JS update could land on a binary missing the native changes it needs.
     policy: process.env.MOBILE_VERSION_POLICY ?? "fingerprint",
   },
   orientation: "portrait",
   icon: variant.assets.appIcon,
   userInterfaceStyle: "automatic",
-  updates: {
-    enabled: true,
-    url: "https://u.expo.dev/d763fcb8-d37c-41ea-a773-b54a0ab4a454",
-    checkAutomatically: "ON_LOAD",
-    fallbackToCacheTimeout: 0,
-  },
+  updates: isIndependentDistribution
+    ? { enabled: false }
+    : {
+        enabled: true,
+        url: "https://u.expo.dev/d763fcb8-d37c-41ea-a773-b54a0ab4a454",
+        checkAutomatically: "ON_LOAD",
+        fallbackToCacheTimeout: 0,
+      },
   ios: {
     icon: variant.assets.iosIcon,
     supportsTablet: true,
     bundleIdentifier: iosBundleIdentifier,
-    // Pin code signing to the T3 Tools team so non-interactive `expo run:ios`
-    // does not fall back to a personal team (which cannot sign app groups,
-    // Sign in with Apple, or push notification entitlements).
-    appleTeamId: "ARK85ZXQ4Z",
-    associatedDomains: [
-      `applinks:${variant.relyingParty}`,
-      `webcredentials:${variant.relyingParty}`,
-    ],
+    ...(iosTeamId ? { appleTeamId: iosTeamId } : {}),
+    ...(configuredIosBuildNumber ? { buildNumber: configuredIosBuildNumber } : {}),
+    ...(!hasReducedIosCapabilities
+      ? {
+          associatedDomains: [
+            `applinks:${variant.relyingParty}`,
+            `webcredentials:${variant.relyingParty}`,
+          ],
+        }
+      : {}),
     infoPlist: {
       NSAppTransportSecurity: {
         NSAllowsArbitraryLoads: true,
@@ -243,9 +309,12 @@ const config: ExpoConfig = {
     ],
     "expo-secure-store",
     "expo-sqlite",
-    ...(isIosPersonalTeamBuild
+    ...(hasReducedIosCapabilities
       ? [sharingPlugin]
       : ["./plugins/withShareExtensionDisplayName.cjs", sharingPlugin]),
+    // Same-type Expo mods run last-registered-first. Register this before all
+    // entitlement-producing plugins so its removal runs last.
+    ...(hasReducedIosCapabilities ? ["./plugins/withIosReducedCapabilities.cjs"] : []),
     [
       "expo-notifications",
       {
@@ -254,9 +323,9 @@ const config: ExpoConfig = {
         mode: APP_VARIANT === "development" ? "development" : "production",
       },
     ],
-    // appleSignIn must be gated here: withoutIosPersonalTeamCapabilities.cjs runs before
-    // plugins earlier in this array, so it cannot strip the entitlement Clerk would add.
-    ["@clerk/expo", { theme: "./clerk-theme.json", appleSignIn: !isIosPersonalTeamBuild }],
+    // Avoid configuring native Sign in with Apple at all for reduced-capability builds;
+    // the entitlement-removal plugin remains a final defense for generated entitlements.
+    ["@clerk/expo", { theme: "./clerk-theme.json", appleSignIn: !hasReducedIosCapabilities }],
     "expo-web-browser",
     [
       "expo-quick-actions",
@@ -311,18 +380,17 @@ const config: ExpoConfig = {
     // expo-widgets' — its dangerous mod wipes ios/ExpoWidgetsTarget/ (which
     // would delete the asset catalog) and its xcodeproj mod creates the widget
     // target (which must exist before the compile phase can be attached).
-    ...(!isIosPersonalTeamBuild ? ["./plugins/withWidgetLogoAsset.cjs", widgetsPlugin] : []),
+    ...(!hasReducedIosCapabilities ? ["./plugins/withWidgetLogoAsset.cjs", widgetsPlugin] : []),
     "./plugins/withIosSceneLifecycle.cjs",
     "./plugins/withAndroidCleartextTraffic.cjs",
     "./plugins/withAndroidGradleHeap.cjs",
     "./plugins/withAndroidModernPopupMenu.cjs",
     "./plugins/withAndroidModernAlertDialog.cjs",
     "./plugins/withAndroidPredictiveBackCompat.cjs",
-    ...(isIosPersonalTeamBuild ? ["./plugins/withoutIosPersonalTeamCapabilities.cjs"] : []),
   ],
   extra: {
     appVariant: APP_VARIANT,
-    iosPersonalTeamBuild: isIosPersonalTeamBuild,
+    iosCapabilityProfile: IOS_CAPABILITY_PROFILE,
     relay: {
       url: repoEnv.T3CODE_RELAY_URL ?? null,
     },
@@ -344,11 +412,15 @@ const config: ExpoConfig = {
       tracesDataset: repoEnv.EXPO_PUBLIC_OTLP_TRACES_DATASET ?? null,
       tracesToken: repoEnv.EXPO_PUBLIC_OTLP_TRACES_TOKEN ?? null,
     },
-    eas: {
-      projectId: "d763fcb8-d37c-41ea-a773-b54a0ab4a454",
-    },
+    ...(!isIndependentDistribution
+      ? {
+          eas: {
+            projectId: "d763fcb8-d37c-41ea-a773-b54a0ab4a454",
+          },
+        }
+      : {}),
   },
-  owner: "pingdotgg",
+  ...(!isIndependentDistribution ? { owner: "pingdotgg" } : {}),
 };
 
 export default config;
